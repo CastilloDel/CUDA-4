@@ -9,37 +9,36 @@
 */
 
 #include <iostream>
-#include <iomanip>
 #include <random>
 #include <chrono>
+#include <vector>
 
 using std::chrono::steady_clock;
 using std::chrono::microseconds;
 using std::chrono::duration_cast;
+using std::vector;
 
 const unsigned int M = 2048;
 const unsigned int N = 2048;
 const unsigned int DEFAULT_BLOCK_SIZE = 128;  
 
-float* create_random_matrix(unsigned int size) {
+vector<float> create_random_matrix(unsigned int size) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<> distribution(-1000.0, 1000.0);
 
-    float* matrix = new float[size * size];
-    for (int i = 0; i < size; i++) {
-        for (int j = 0; j < size; j++) {
-            matrix[i * size + j] = distribution(gen);
-        }
+    vector<float> matrix(size * size);
+    for (int i = 0; i < size * size; i++) {
+        matrix[i] = distribution(gen);
     }
     return matrix;
 }
 
-float* sum_rows_cpu(const float* const matrix, unsigned int size) {
-    float* rows_sum = new float[size]();
+vector<float> sum_rows_cpu(const vector<float>& matrix, unsigned int size) {
+    vector<float> rows_sum(size, 0);
     for (int i = 0; i < size; i++) {
         for (int j = 0; j < size; j++) {
-            rows_sum[i] += matrix[i * SIZE + j];
+            rows_sum[i] += matrix[i * size + j];
         }
     }
     return rows_sum;
@@ -55,15 +54,16 @@ __global__ void sum_rows_kernel(const float* const matrix, float* const rows_sum
     }
 }
 
-float* sum_rows_gpu(const float* const matrix, unsigned int size, microseconds* const computation_duration) {
+vector<float> sum_rows_gpu(const vector<float>& matrix, int size, microseconds* const computation_duration) {
     float* gpu_matrix;
-    unsigned int size_in_bytes = size * size * sizeof(float);
+    unsigned int size_in_bytes = matrix.size() * sizeof(float);
     cudaMalloc(&gpu_matrix, size_in_bytes);
-    cudaMemcpy(gpu_matrix, matrix, size_in_bytes, cudaMemcpyHostToDevice); 
+    cudaMemcpy(gpu_matrix, matrix.data(), size_in_bytes, cudaMemcpyHostToDevice); 
 
     float* gpu_rows_sum;
-    cudaMalloc(&gpu_rows_sum, size_in_bytes);
-    cudaMemset(gpu_rows_sum, 0, size_in_bytes); 
+    unsigned int row_size_in_bytes = size * sizeof(float);
+    cudaMalloc(&gpu_rows_sum, row_size_in_bytes);
+    cudaMemset(gpu_rows_sum, 0, row_size_in_bytes); 
 
     dim3 dimBlock(DEFAULT_BLOCK_SIZE);
     dim3 dimGrid((size + dimBlock.x - 1) / dimBlock.x);
@@ -79,8 +79,8 @@ float* sum_rows_gpu(const float* const matrix, unsigned int size, microseconds* 
         *computation_duration = duration_cast<microseconds>(end - start);
     }
 
-    float* rows_sum = new float[size];
-    cudaMemcpy(rows_sum, gpu_rows_sum, size * sizeof(float), cudaMemcpyDeviceToHost); 
+    vector<float> rows_sum(size);
+    cudaMemcpy(rows_sum.data(), gpu_rows_sum, row_size_in_bytes, cudaMemcpyDeviceToHost); 
 
     cudaFree(gpu_matrix);
     cudaFree(gpu_rows_sum);
@@ -89,26 +89,22 @@ float* sum_rows_gpu(const float* const matrix, unsigned int size, microseconds* 
 }
 
 int main() {
-    float* matrix = create_random_matrix(SIZE);
+    vector<float> matrix = create_random_matrix(N);
     
-    float* rows_sum_cpu = sum_rows_cpu(matrix, SIZE);
+    vector<float> rows_sum_cpu = sum_rows_cpu(matrix, N);
     
     microseconds computation_duration;
 
     auto start = steady_clock::now();
-    float* rows_sum_gpu = sum_rows_gpu(matrix, SIZE, &computation_duration);
+    vector<float> rows_sum_gpu = sum_rows_gpu(matrix, N, &computation_duration);
     auto end = steady_clock::now();
     
     microseconds total_duration = duration_cast<microseconds>(end - start);
 
-    bool equal = std::equal(rows_sum_cpu, rows_sum_cpu + SIZE, rows_sum_gpu);
+    bool equal = std::equal(rows_sum_cpu.begin(), rows_sum_cpu.end(), rows_sum_gpu.begin());
     std::cout << (equal ? "The result was the same for the CPU and GPU" : "There was an error");
     std::cout << "\n";
 
     std::cout << "Total time: " << total_duration.count() << "us\n";
     std::cout << "Computation time in the GPU: " << computation_duration.count() << "us\n";
-
-    delete[] matrix;
-    delete[] rows_sum_cpu;
-    delete[] rows_sum_gpu;
 }
